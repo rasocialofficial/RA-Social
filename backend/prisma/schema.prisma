@@ -1,0 +1,565 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id            String    @id @default(uuid())
+  username      String    @unique
+  email         String    @unique
+  phoneNumber   String?
+  passwordHash  String
+  fullName      String?
+  bio           String?   @default("")
+  avatarUrl     String?
+  role          String    @default("user")
+  status        String    @default("active")
+  earnings      Float     @default(0)
+  monetizationStatus String @default("not_eligible")
+  monetizationAppliedAt DateTime?
+  monetizationApprovedAt DateTime?
+  channelNumber String? @unique
+  channelName String?
+  channelCreatedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  posts         Post[]
+  postViews     PostView[]
+  comments      Comment[]
+  likes         Like[]
+  followers     Follow[]  @relation("followers")
+  following     Follow[]  @relation("following")
+  notifications Notification[] @relation("receivedNotifications")
+  sentNotifications Notification[] @relation("sentNotifications")
+  chats         Chat[]
+  messages      Message[]
+  hiddenMessages MessageHidden[]
+  aiConversations AIConversation[]
+  aiMemories     AIMemory[]
+  reportsFiled   Report[] @relation("reporter")
+  broadcastsSent Broadcast[]
+  passwordResetChallenges PasswordResetChallenge[]
+  vibes           Vibe[]
+  blocksGiven     UserBlock[] @relation("blocksGiven")
+  blocksReceived  UserBlock[] @relation("blocksReceived")
+  mutesGiven      UserMute[] @relation("mutesGiven")
+  mutesReceived   UserMute[] @relation("mutesReceived")
+  restrictsGiven  UserRestrict[] @relation("restrictsGiven")
+  restrictsReceived UserRestrict[] @relation("restrictsReceived")
+  savedPosts      SavedPost[]
+  payouts         Payout[]
+  creatorEarnings CreatorEarning[]
+  sessions      Session[]
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecretEnc String?
+  twoFactorBackupCodes Json @default("[]")
+  vibeReactions   VibeReaction[]
+  vibeReplies     VibeReply[]
+  vibeViews       VibeView[]
+  mailAiMails    MailAIMessage[] @relation("MailAiUser")
+  liveSessions  CreatorLiveSession[]
+
+  @@index([username])
+  @@index([email])
+  @@index([phoneNumber])
+}
+
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenId      String   @unique
+  deviceName   String?
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+}
+
+model UserBlock {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  blocker   User @relation("blocksGiven", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked   User @relation("blocksReceived", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+}
+
+model UserMute {
+  id        String   @id @default(uuid())
+  muterId   String
+  mutedId   String
+  muter     User @relation("mutesGiven", fields: [muterId], references: [id], onDelete: Cascade)
+  muted     User @relation("mutesReceived", fields: [mutedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@unique([muterId, mutedId])
+  @@index([mutedId])
+}
+
+model UserRestrict {
+  id           String   @id @default(uuid())
+  restrictorId String
+  restrictedId String
+  restrictor   User @relation("restrictsGiven", fields: [restrictorId], references: [id], onDelete: Cascade)
+  restricted  User @relation("restrictsReceived", fields: [restrictedId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  @@unique([restrictorId, restrictedId])
+  @@index([restrictedId])
+}
+
+model Post {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content     String?
+  mediaUrl    String?
+  mediaType   String?
+  isCreatorAd Boolean  @default(false)
+  status      String   @default("approved")
+  viewCount   Int      @default(0)
+  postViews   PostView[]
+  likes       Like[]
+  comments    Comment[]
+  notifications Notification[]
+  hashtags    PostHashtag[]
+  reports     Report[]
+  savedBy     SavedPost[]
+  creatorEarnings CreatorEarning[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model SavedPost {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, postId])
+  @@index([userId, createdAt])
+  @@index([postId])
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([postId])
+  @@index([userId])
+}
+
+model Like {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, postId])
+  @@index([postId])
+}
+
+model Follow {
+  followerId  String
+  follower    User   @relation("followers", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User   @relation("following", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([followerId, followingId])
+}
+
+model Hashtag {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  posts     PostHashtag[]
+
+  @@index([name])
+}
+
+model PostHashtag {
+  postId    String
+  post      Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  hashtagId String
+  hashtag   Hashtag @relation(fields: [hashtagId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, hashtagId])
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  receiverId  String
+  receiver    User     @relation("receivedNotifications", fields: [receiverId], references: [id], onDelete: Cascade)
+  senderId    String?
+  sender      User?    @relation("sentNotifications", fields: [senderId], references: [id])
+  type        String
+  broadcastId String?
+  broadcast   Broadcast? @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  postId      String?
+  post        Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  message     String
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([receiverId])
+  @@index([isRead])
+  @@index([broadcastId])
+}
+
+model Chat {
+  id          String   @id @default(uuid())
+  participants User[]
+  messages    Message[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  chatId    String
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  content   String
+  mediaUrl  String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  hiddenFor MessageHidden[]
+  replyToId String?
+  replyTo Message? @relation("messageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies Message[] @relation("messageReplies")
+  forwardedFromId String?
+  forwardedFrom Message? @relation("messageForwards", fields: [forwardedFromId], references: [id], onDelete: SetNull)
+  forwards Message[] @relation("messageForwards")
+  pinned Boolean @default(false)
+
+  @@index([chatId])
+  @@index([senderId])
+  @@index([replyToId])
+  @@index([forwardedFromId])
+}
+
+model MessageHidden {
+  id        String   @id @default(uuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId])
+  @@index([userId])
+}
+
+model PostView {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, postId])
+  @@index([postId])
+  @@index([userId])
+}
+
+model AIMemory {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String
+  category  String   @default("general")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([category])
+}
+
+model AIConversation {
+  id        String      @id @default(uuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String      @default("New AI chat")
+  messages  AIMessage[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([userId])
+  @@index([updatedAt])
+}
+
+model AIMessage {
+  id             String        @id @default(uuid())
+  conversationId String
+  conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String
+  model          String?
+  attachments    Json?
+  createdAt      DateTime      @default(now())
+
+  @@index([conversationId])
+  @@index([createdAt])
+}
+
+
+model Report {
+  id         String   @id @default(uuid())
+  reporterId String
+  reporter   User     @relation("reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  postId     String
+  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reason     String
+  status     String   @default("pending")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([reporterId, postId])
+  @@index([postId])
+  @@index([status])
+}
+
+model Broadcast {
+  id              String   @id @default(uuid())
+  senderId        String
+  sender          User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  title           String
+  message         String
+  audience        String   @default("all_users")
+  recipientCount  Int      @default(0)
+  notifications   Notification[]
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+
+
+model Vibe {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaUrl      String
+  mediaType     String
+  caption       String?
+  publicId      String?
+  resourceType  String?
+  expiresAt     DateTime
+  status        String   @default("active")
+  moderationReason String?
+  moderatedAt   DateTime?
+  createdAt     DateTime @default(now())
+  views         VibeView[]
+  reactions     VibeReaction[]
+  replies       VibeReply[]
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([status])
+}
+
+model VibeView {
+  id        String   @id @default(uuid())
+  vibeId    String
+  vibe      Vibe     @relation(fields: [vibeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@unique([vibeId, userId])
+  @@index([userId])
+}
+
+model VibeReaction {
+  id        String   @id @default(uuid())
+  vibeId    String
+  vibe      Vibe     @relation(fields: [vibeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emoji     String
+  createdAt DateTime @default(now())
+  @@unique([vibeId, userId])
+  @@index([vibeId])
+}
+
+model VibeReply {
+  id        String   @id @default(uuid())
+  vibeId    String
+  vibe      Vibe     @relation(fields: [vibeId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now())
+  @@index([vibeId, createdAt])
+  @@index([userId])
+}
+
+model PasswordResetChallenge {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  otpHash   String
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  verifiedAt DateTime?
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+
+model Payout {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount         Float
+  currency       String   @default("USD")
+  method         String
+  accountLabel   String?
+  status         String   @default("pending")
+  adminNote      String?
+  requestedAt    DateTime @default(now())
+  processedAt    DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+
+model CreatorEarning {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount      Float
+  currency    String   @default("USD")
+  source      String   @default("other")
+  description String?
+  postId      String?
+  post        Post?    @relation(fields: [postId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([source, createdAt])
+  @@index([postId])
+}
+
+model AdCampaign {
+  id          String   @id @default(uuid())
+  name        String
+  type        String   @default("banner")
+  status      String   @default("draft")
+  advertiser  String?
+  targetUrl   String?
+  mediaUrl    String?
+  budget      Float    @default(0)
+  spent       Float    @default(0)
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  events      AdEvent[]
+
+  @@index([status])
+  @@index([type])
+  @@index([startsAt, endsAt])
+}
+
+model AdEvent {
+  id         String     @id @default(uuid())
+  campaignId String
+  campaign   AdCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  eventType  String
+  userId     String?
+  createdAt  DateTime   @default(now())
+
+  @@index([campaignId, eventType])
+  @@index([createdAt])
+}
+
+
+model CreatorLiveSession {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  status      String   @default("scheduled")
+  startedAt   DateTime?
+  endedAt     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model MailAIMessage {
+  id              String          @id @default(uuid())
+  userId          String?
+  user            User?           @relation("MailAiUser", fields: [userId], references: [id], onDelete: SetNull)
+  senderEmail     String
+  receiverEmail   String
+  externalId      String?         @unique
+  subject         String
+  body            String
+  status          String          @default("pending")
+  autoReply       Boolean         @default(false)
+  replyBody       String?
+  category        String          @default("general")
+  sentiment       String          @default("neutral")
+  urgency         String          @default("low")
+  spamScore       Float           @default(0)
+  phishingRisk    String          @default("low")
+  summary         String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  replies         MailAIReply[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([senderEmail])
+}
+
+model MailAIReply {
+  id          String        @id @default(uuid())
+  messageId   String
+  message     MailAIMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  body        String
+  status      String        @default("generated")
+  createdAt   DateTime      @default(now())
+
+  @@index([messageId, createdAt])
+}

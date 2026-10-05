@@ -1,0 +1,14 @@
+import express from 'express';
+import { getChats, getChatMessages, markChatRead, createChat, sendMessage, deleteMessageForMe, deleteMessageForEveryone, toggleMessagePin, forwardMessage } from '../controllers/chatController.js';
+import { protect } from '../middleware/authMiddleware.js';
+const router = express.Router();
+router.get('/', protect, getChats);
+router.get('/:chatId/messages', protect, getChatMessages);
+router.post('/:chatId/read', protect, markChatRead);
+router.post('/:chatId/messages', protect, sendMessage);
+router.delete('/:chatId/messages/:messageId/me', protect, deleteMessageForMe);
+router.delete('/:chatId/messages/:messageId/everyone', protect, deleteMessageForEveryone);
+router.patch('/:chatId/messages/:messageId/pin', protect, toggleMessagePin);
+router.post('/:chatId/messages/:messageId/forward', protect, forwardMessage);
+router.post('/', protect, createChat);
+export default router;

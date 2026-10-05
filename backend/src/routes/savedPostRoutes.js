@@ -1,0 +1,10 @@
+import express from 'express';
+import { protect } from '../middleware/authMiddleware.js';
+import { listSavedPosts, savePost, unsavePost, savedStatus } from '../controllers/savedPostController.js';
+const router = express.Router();
+router.use(protect);
+router.get('/', listSavedPosts);
+router.get('/:postId/status', savedStatus);
+router.post('/:postId', savePost);
+router.delete('/:postId', unsavePost);
+export default router;
