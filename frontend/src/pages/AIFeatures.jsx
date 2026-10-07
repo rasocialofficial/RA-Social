@@ -3,42 +3,12 @@ import {
   Plus, Send, Paperclip, Image as ImageIcon, Video, FileText,
   MessageSquare, Trash2, X, Sparkles, Menu, ArrowLeft, Loader2,
   Bot, User as UserIcon, Mic, Palette, Brain, Settings, Download, FolderOpen, Wand2,
-  Search, Code2, BarChart3, PenSquare, Share2, Copy, RefreshCw, Check
+  Search, Code2, BarChart3, PenSquare, Share2
 } from 'lucide-react';
 import { aiAPI } from '../services/aiApi';
-import { postAPI } from '../services/api';
 import MediaEditor from '../components/MediaEditor';
 
 const MAX_FILES = 6;
-const STYLE_OPTIONS = [
-  { value: 'realistic', label: 'Realistic' },
-  { value: 'anime', label: 'Anime' },
-  { value: 'cartoon', label: 'Cartoon' },
-  { value: '3d', label: '3D' },
-  { value: 'cinematic', label: 'Cinematic' }
-];
-
-// Reveals a finished AI reply word by word (only when animate is true)
-function StreamText({ text = '', animate = false, onTick }) {
-  const tokens = React.useMemo(() => String(text).split(/(\s+)/), [text]);
-  const [count, setCount] = useState(animate ? 0 : tokens.length);
-  useEffect(() => {
-    if (!animate) { setCount(tokens.length); return undefined; }
-    setCount(0);
-    const step = Math.max(2, Math.ceil(tokens.length / 90));
-    const timer = setInterval(() => {
-      setCount((c) => {
-        const next = Math.min(tokens.length, c + step);
-        if (next >= tokens.length) clearInterval(timer);
-        return next;
-      });
-      if (onTick) onTick();
-    }, 30);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, animate]);
-  return <>{tokens.slice(0, count).join('')}</>;
-}
 
 function AIFeatures({ searchQuery = '' }) {
   const [conversations, setConversations] = useState([]);
@@ -73,16 +43,6 @@ function AIFeatures({ searchQuery = '' }) {
   const [autoSaveChats, setAutoSaveChats] = useState(() => localStorage.getItem('ra-ai-auto-save') !== 'false');
   const [compactMode, setCompactMode] = useState(() => localStorage.getItem('ra-ai-compact') === 'true');
   const [usage, setUsage] = useState(null);
-  const [mediaAspect, setMediaAspect] = useState('1:1');
-  const [mediaStyle, setMediaStyle] = useState('');
-  const [copiedId, setCopiedId] = useState(null);
-  const [postingUrl, setPostingUrl] = useState(null);
-  const [actionNotice, setActionNotice] = useState('');
-  const historyIdsRef = useRef(new Set());
-  const effectiveAspect = mediaGenerateMode === 'video' && mediaAspect === '1:1' ? '16:9' : mediaAspect;
-  const mediaUsage = usage?.media || null;
-  const limitKey = mediaGenerateMode === 'video' ? 'video' : mediaGenerateMode ? 'image' : null;
-  const modeLimitReached = Boolean(limitKey && mediaUsage?.[limitKey] && mediaUsage[limitKey].remaining <= 0);
   const [capabilities, setCapabilities] = useState(null);
   const [memories, setMemories] = useState([]);
   const audioInputRef = useRef(null);
@@ -150,7 +110,6 @@ function AIFeatures({ searchQuery = '' }) {
       const res = await aiAPI.getConversation(id);
       const data = res.data?.data?.conversation;
       setConversationId(data.id);
-      (data.messages || []).forEach((m) => historyIdsRef.current.add(m.id));
       setMessages(data.messages || []);
       setAttachments([]);
       setRawFiles([]);
@@ -410,7 +369,7 @@ function AIFeatures({ searchQuery = '' }) {
 
   const runMediaGeneration = async () => {
     const prompt = inputText.trim();
-    if (!prompt || sending || !mediaGenerateMode || modeLimitReached) return;
+    if (!prompt || sending || !mediaGenerateMode) return;
     const type = mediaGenerateMode;
     setSending(true);
     setMessages((prev) => [...prev, { id: `media-user-${Date.now()}`, role: 'user', content: prompt }]);
@@ -422,15 +381,13 @@ function AIFeatures({ searchQuery = '' }) {
         const response = await aiAPI.editImage(sourceFile, prompt, conversationId, editSourceUrl);
         const data = response.data?.data || {};
         if (data.conversationId) setConversationId(data.conversationId);
-        if (data.usage) setUsage((prev) => ({ ...(prev || {}), media: data.usage }));
         setMessages((prev) => [...prev, { id: data.messageId || `edit-ai-${Date.now()}`, role: 'assistant', content: 'Image edited successfully.', model: data.model, mediaUrl: data.url, mediaType: 'image', mediaAI: true }]);
       } else {
         const response = type === 'image'
-          ? await aiAPI.generateImage({ prompt, conversationId, style: mediaStyle, aspectRatio: effectiveAspect })
-          : await aiAPI.generateVideo({ prompt, duration: 4, conversationId, style: mediaStyle, aspectRatio: effectiveAspect });
+          ? await aiAPI.generateImage({ prompt, conversationId })
+          : await aiAPI.generateVideo({ prompt, duration: 4, conversationId });
         const data = response.data?.data || {};
         if (data.conversationId) setConversationId(data.conversationId);
-        if (data.usage) setUsage((prev) => ({ ...(prev || {}), media: data.usage }));
         setMessages((prev) => [...prev, {
           id: `media-ai-${Date.now()}`,
           role: 'assistant',
@@ -438,17 +395,13 @@ function AIFeatures({ searchQuery = '' }) {
           model: data.model,
           mediaUrl: data.url,
           mediaType: type,
-          mediaAI: true,
-          mediaPrompt: prompt,
-          mediaStyle,
-          mediaAspect: effectiveAspect
+          mediaAI: true
         }]);
       }
       setMediaGenerateMode(null);
       setEditSourceUrl('');
       await loadHistory();
     } catch (error) {
-      if (error.response?.data?.usage) setUsage((prev) => ({ ...(prev || {}), media: error.response.data.usage }));
       setMessages((prev) => [...prev, { id: `error-${Date.now()}`, role: 'assistant', content: error.response?.data?.message || error.message || `${type === 'edit-image' ? 'Image editing' : type === 'image' ? 'Image' : 'Video'} failed. Check the media generation API configuration.` }]);
     } finally { setSending(false); }
   };
@@ -606,107 +559,6 @@ function AIFeatures({ searchQuery = '' }) {
     return <FileText size={16} />;
   };
 
-  const flashNotice = (text) => {
-    setActionNotice(text);
-    setTimeout(() => setActionNotice((current) => (current === text ? '' : current)), 3500);
-  };
-
-  const getMessageMedia = (message) => {
-    if (message.role !== 'assistant') return null;
-    if (message.mediaUrl) return { url: message.mediaUrl, type: message.mediaType, style: message.mediaStyle, aspectRatio: message.mediaAspect };
-    const att = (message.attachments || []).find((a) => a?.url && (a.type === 'image' || a.type === 'video') && /^AI /.test(a.name || ''));
-    return att ? { url: att.url, type: att.type, style: att.style, aspectRatio: att.aspectRatio } : null;
-  };
-
-  const promptForMessage = (message, index) => message.mediaPrompt || (messages[index - 1]?.role === 'user' ? messages[index - 1].content : '');
-
-  const copyReply = async (message) => {
-    const text = message.content || '';
-    try { await navigator.clipboard.writeText(text); }
-    catch (_) {
-      const area = document.createElement('textarea');
-      area.value = text; document.body.appendChild(area); area.select();
-      try { document.execCommand('copy'); } catch (__) { /* ignore */ }
-      area.remove();
-    }
-    setCopiedId(message.id);
-    setTimeout(() => setCopiedId((id) => (id === message.id ? null : id)), 1500);
-  };
-
-  const downloadMedia = (media) => {
-    if (!media?.url) return;
-    let href = media.url;
-    if (/res\.cloudinary\.com/.test(href) && href.includes('/upload/') && !href.includes('fl_attachment')) href = href.replace('/upload/', '/upload/fl_attachment/');
-    const a = document.createElement('a');
-    a.href = href; a.download = `ra-social-ai-${Date.now()}.${media.type === 'video' ? 'mp4' : 'png'}`; a.target = '_blank'; a.rel = 'noreferrer';
-    document.body.appendChild(a); a.click(); a.remove();
-  };
-
-  const postToFeed = async (media, defaultCaption = '') => {
-    const caption = window.prompt(`Add a caption for your ${media.type === 'video' ? 'reel' : 'post'} (optional):`, String(defaultCaption || '').slice(0, 200));
-    if (caption === null) return;
-    setPostingUrl(media.url);
-    try {
-      await postAPI.create({ content: caption.trim(), mediaUrl: media.url, mediaType: media.type, isCreatorAd: false });
-      flashNotice(media.type === 'video' ? 'Posted as a Reel.' : 'Posted to your feed.');
-    } catch (error) {
-      flashNotice(error.response?.data?.message || 'Could not post. Please try again.');
-    } finally { setPostingUrl(null); }
-  };
-
-  const regenerateMedia = async (message, index) => {
-    const media = getMessageMedia(message);
-    const prompt = promptForMessage(message, index);
-    if (!media || !prompt || sending) return;
-    const type = media.type === 'video' ? 'video' : 'image';
-    if (mediaUsage?.[type] && mediaUsage[type].remaining <= 0) { flashNotice(`Today's ${type} limit is finished. It resets tomorrow at 12:00 AM IST.`); return; }
-    const style = media.style ?? mediaStyle;
-    const aspectRatio = media.aspectRatio || effectiveAspect;
-    setSending(true);
-    try {
-      const response = type === 'image'
-        ? await aiAPI.generateImage({ prompt, conversationId, style, aspectRatio })
-        : await aiAPI.generateVideo({ prompt, duration: 4, conversationId, style, aspectRatio });
-      const data = response.data?.data || {};
-      if (data.conversationId) setConversationId(data.conversationId);
-      if (data.usage) setUsage((prev) => ({ ...(prev || {}), media: data.usage }));
-      setMessages((prev) => [...prev, {
-        id: data.messageId || `media-ai-${Date.now()}`,
-        role: 'assistant',
-        content: type === 'image' ? 'Image generated successfully.' : 'Video generated successfully.',
-        model: data.model, mediaUrl: data.url, mediaType: type, mediaAI: true, mediaPrompt: prompt, mediaStyle: style, mediaAspect: aspectRatio
-      }]);
-      await loadHistory();
-    } catch (error) {
-      if (error.response?.data?.usage) setUsage((prev) => ({ ...(prev || {}), media: error.response.data.usage }));
-      setMessages((prev) => [...prev, { id: `error-${Date.now()}`, role: 'assistant', content: error.response?.data?.message || error.message || 'Regenerate failed. Please try again.' }]);
-    } finally { setSending(false); }
-  };
-
-  const renderMessageActions = (message, index) => {
-    if (message.role !== 'assistant' || String(message.id).startsWith('error-')) return null;
-    const btn = 'inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40';
-    const media = getMessageMedia(message);
-    if (media) {
-      const edited = /^Image edited/i.test(message.content || '');
-      return (
-        <div className="mt-2 flex flex-wrap gap-2">
-          <button onClick={() => downloadMedia(media)} className={btn}><Download size={13} /> Download</button>
-          <button onClick={() => postToFeed(media, promptForMessage(message, index))} disabled={postingUrl === media.url} className={btn}>
-            {postingUrl === media.url ? <Loader2 size={13} className="animate-spin" /> : <Share2 size={13} />} {media.type === 'video' ? 'Post as Reel' : 'Post'}
-          </button>
-          {!edited && <button onClick={() => regenerateMedia(message, index)} disabled={sending} className={btn}><RefreshCw size={13} /> Regenerate</button>}
-        </div>
-      );
-    }
-    if (!message.content) return null;
-    return (
-      <div className="mt-2 flex">
-        <button onClick={() => copyReply(message)} className={btn}>{copiedId === message.id ? <Check size={13} /> : <Copy size={13} />} {copiedId === message.id ? 'Copied' : 'Copy'}</button>
-      </div>
-    );
-  };
-
   return (
     <div className="pt-16 pb-28 min-h-[100dvh] bg-gradient-to-b from-white to-purple-50/40 flex flex-col overflow-hidden">
       <div className="flex-1 flex min-h-[calc(100vh-64px)] overflow-hidden">
@@ -775,7 +627,7 @@ function AIFeatures({ searchQuery = '' }) {
               </div>
             ) : (
               <div className="max-w-3xl mx-auto space-y-5">
-                {messages.map((message, messageIndex) => (
+                {messages.map((message) => (
                   <div key={message.id} className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     {message.role !== 'user' && <div className="w-8 h-8 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 text-white flex items-center justify-center shrink-0"><Bot size={16} /></div>}
                     <div className={`max-w-[85%] rounded-2xl px-4 py-3 ${message.role === 'user' ? 'bg-gradient-to-r from-purple-600 to-pink-500 text-white rounded-br-md' : 'bg-white border border-gray-100 shadow-sm text-gray-800 rounded-bl-md'}`}>
@@ -791,11 +643,10 @@ function AIFeatures({ searchQuery = '' }) {
                           })}
                         </div>
                       )}
-                      <div className="whitespace-pre-wrap break-words text-[15px] leading-6">{message.role === 'assistant' ? <StreamText text={message.content} animate={!message.mediaUrl && !String(message.id).startsWith('error-') && !historyIdsRef.current.has(message.id)} onTick={() => messagesEndRef.current?.scrollIntoView({ block: 'end' })} /> : message.content}</div>
+                      <div className="whitespace-pre-wrap break-words text-[15px] leading-6">{message.content}</div>
                       {message.mediaUrl && message.mediaType === 'image' && <><img src={message.mediaUrl} alt="AI generated" className="mt-3 max-w-full rounded-xl border" loading="lazy" /><button onClick={() => startImageEdit(message.mediaUrl)} className="mt-2 inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-gray-50"><Wand2 size={14} /> Edit image</button></>}
                       {message.mediaUrl && message.mediaType === 'video' && <video src={message.mediaUrl} controls playsInline className="mt-3 max-w-full rounded-xl border" />}
                       {message.mediaUrl && <a href={message.mediaUrl} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs text-purple-600 hover:underline">Open generated {message.mediaType}</a>}
-                      {renderMessageActions(message, messageIndex)}
                       {(message.model || message.agent || message.vision || message.fileAI || message.coding || message.dataAI || message.socialAI || message.creativeAI || message.videoAI || message.memoryAI || message.mediaAI) && <div className="mt-2 text-[10px] opacity-50 flex flex-wrap gap-2">{message.model && <span>{message.model}</span>}{message.agent && <span>• Agent tools used</span>}{message.writing && <span>• Writing AI</span>}{message.vision && <span>• Vision analysis</span>}{message.fileAI && <span>• File analysis</span>}{message.coding && <span>• Coding AI</span>}{message.dataAI && <span>• Data & Reasoning</span>}{message.socialAI && <span>• Social & Reels</span>}{message.creativeAI && <span>• Creative AI</span>}{message.videoAI && <span>• Video AI</span>}{message.mediaAI && <span>• Media Generation</span>}{message.memoryAI && <span>• Memory</span>}</div>}
                       {message.sources?.length > 0 && (
                         <div className="mt-3 pt-2 border-t border-gray-100">
@@ -917,31 +768,11 @@ function AIFeatures({ searchQuery = '' }) {
                   {memories.length > 0 && <div className="mt-2 space-y-1 max-h-24 overflow-y-auto">{memories.slice(0, 8).map((item) => <div key={item.id} className="flex gap-2 items-start bg-white/70 rounded-lg p-2"><span className="flex-1">{item.content}</span><button onClick={() => deleteMemory(item.id)} className="text-red-500"><Trash2 size={13} /></button></div>)}</div>}
                 </div>
               )}
-              {!mediaGenerateMode && (
-                <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-                  <button onClick={() => toggleMode('image')} className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1 font-medium text-rose-700 hover:bg-rose-100"><ImageIcon size={14} /> Generate image</button>
-                  <button onClick={() => toggleMode('mediaVideo')} className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 font-medium text-sky-700 hover:bg-sky-100"><Video size={14} /> Generate video</button>
-                </div>
-              )}
               {mediaGenerateMode && (
-                <div className={`mb-2 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs ${mediaGenerateMode === 'image' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
+                <div className={`mb-2 flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${mediaGenerateMode === 'image' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
                   {mediaGenerateMode === 'image' ? <ImageIcon size={15} /> : <Video size={15} />}
                   <span className="font-semibold">{mediaGenerateMode === 'image' ? 'AI Image Generation' : mediaGenerateMode === 'edit-image' ? 'AI Image Editing' : 'AI Video Generation'}</span>
                   <span className="text-[11px] opacity-70">Powered by Pollinations</span>
-                  {mediaGenerateMode !== 'edit-image' && (
-                    <>
-                      <select value={effectiveAspect} onChange={(e) => setMediaAspect(e.target.value)} className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-gray-700 outline-none">
-                        {mediaGenerateMode !== 'video' && <option value="1:1">1:1 Square</option>}
-                        <option value="9:16">9:16 Reels</option>
-                        <option value="16:9">16:9 Wide</option>
-                      </select>
-                      <select value={mediaStyle} onChange={(e) => setMediaStyle(e.target.value)} className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-gray-700 outline-none">
-                        <option value="">No style</option>
-                        {STYLE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                      </select>
-                    </>
-                  )}
-                  {limitKey && mediaUsage?.[limitKey] && <span className="text-[11px] font-semibold">{mediaUsage[limitKey].remaining > 0 ? `${mediaUsage[limitKey].remaining} left today` : 'Limit finished. Resets 12:00 AM IST'}</span>}
                   <button onClick={() => setMediaGenerateMode(null)} className="ml-auto px-2 py-1 rounded-lg hover:bg-white/70">Cancel</button>
                 </div>
               )}
@@ -955,22 +786,14 @@ function AIFeatures({ searchQuery = '' }) {
                   <button onClick={() => setResearchMode(false)} className="px-2 py-1 rounded-lg hover:bg-purple-100">Cancel</button>
                 </div>
               )}
-              {actionNotice && <div className="mb-2 rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-center text-xs text-green-700">{actionNotice}</div>}
               <div className="flex items-end gap-2 border rounded-2xl p-2 shadow-sm focus-within:border-purple-400 bg-white">
                 <button onClick={() => audioInputRef.current?.click()} disabled={sending} className="w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-600 disabled:opacity-40" title="Voice transcription"><Mic size={20} /></button>
                 <input ref={audioInputRef} type="file" accept="audio/*" onChange={handleAudio} className="hidden" />
                 <button onClick={() => fileInputRef.current?.click()} disabled={uploading || attachments.length >= MAX_FILES} className="w-10 h-10 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-600 disabled:opacity-40" title="Attach files"><Plus size={23} /></button>
                 <input ref={fileInputRef} type="file" multiple accept="image/*,video/*,.pdf,.txt,.json,.csv,.md,.log,.xml,.html,.css,.js,.jsx,.ts,.tsx,.sql,.prisma,.yaml,.yml,.zip" onChange={handleFiles} className="hidden" />
                 <textarea value={inputText} onChange={(e) => setInputText(e.target.value)} onKeyDown={handleKeyDown} rows={1} placeholder={uploading ? 'Uploading files...' : 'Message RA Social AI...'} className="flex-1 resize-none outline-none bg-transparent px-2 py-2 max-h-32" />
-                <button onClick={mediaGenerateMode ? runMediaGeneration : researchMode ? runDeepResearch : codingMode ? runCodingAI : dataMode ? runDataAI : writingMode ? runWritingAI : socialMode ? runSocialAI : creativeMode ? runCreativeAI : videoMode ? runVideoAI : memoryMode ? saveMemory : sendMessage} disabled={sending || uploading || (!inputText.trim() && !attachments.length) || (Boolean(mediaGenerateMode) && modeLimitReached)} className="w-10 h-10 rounded-full bg-gradient-to-r from-pink-500 to-purple-600 text-white flex items-center justify-center disabled:opacity-40" title={mediaGenerateMode ? `Generate ${mediaGenerateMode}` : researchMode ? 'Start research' : codingMode ? 'Run coding AI' : dataMode ? 'Run data analysis' : writingMode ? 'Run Writing AI' : socialMode ? 'Run Social & Reels AI' : creativeMode ? 'Run Creative AI' : videoMode ? 'Run Video AI' : memoryMode ? 'Save memory' : 'Send'}><Send size={18} /></button>
+                <button onClick={mediaGenerateMode ? runMediaGeneration : researchMode ? runDeepResearch : codingMode ? runCodingAI : dataMode ? runDataAI : writingMode ? runWritingAI : socialMode ? runSocialAI : creativeMode ? runCreativeAI : videoMode ? runVideoAI : memoryMode ? saveMemory : sendMessage} disabled={sending || uploading || (!inputText.trim() && !attachments.length)} className="w-10 h-10 rounded-full bg-gradient-to-r from-pink-500 to-purple-600 text-white flex items-center justify-center disabled:opacity-40" title={mediaGenerateMode ? `Generate ${mediaGenerateMode}` : researchMode ? 'Start research' : codingMode ? 'Run coding AI' : dataMode ? 'Run data analysis' : writingMode ? 'Run Writing AI' : socialMode ? 'Run Social & Reels AI' : creativeMode ? 'Run Creative AI' : videoMode ? 'Run Video AI' : memoryMode ? 'Save memory' : 'Send'}><Send size={18} /></button>
               </div>
-              {mediaUsage && (
-                <div className="mt-2 flex flex-wrap justify-center gap-x-3 text-[10px] text-gray-500">
-                  <span>Images left today: <b>{mediaUsage.image.remaining}/{mediaUsage.image.limit}</b></span>
-                  <span>Videos left today: <b>{mediaUsage.video.remaining}/{mediaUsage.video.limit}</b></span>
-                  <span>Resets 12:00 AM IST</span>
-                </div>
-              )}
               <div className="text-[10px] text-gray-400 text-center mt-2">+ supports up to {MAX_FILES} attachments • AI may make mistakes</div>
             </div>
           </div>
