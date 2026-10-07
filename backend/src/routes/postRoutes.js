@@ -20,7 +20,7 @@ const router = express.Router();
 
 router.get('/:id/download', async (req, res) => {
   try {
-    const post = await (await import('../config/database.js')).default.post.findUnique({ where: { id: req.params.id }, select: { mediaUrl: true, mediaType: true } });
+    const post = await (await import('../config/database.js')).default.post.findUnique({ where: { id: req.params.id, status: 'approved' }, select: { mediaUrl: true, mediaType: true } });
     if (!post?.mediaUrl) return res.status(404).json({ success: false, message: 'Media not found' });
     const upstream = await axios.get(post.mediaUrl, { responseType: 'stream', timeout: 60000 });
     const contentType = upstream.headers['content-type'] || (post.mediaType === 'video' ? 'video/mp4' : 'image/jpeg');

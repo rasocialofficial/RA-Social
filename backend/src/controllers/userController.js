@@ -7,10 +7,11 @@ export const getPublicUser = async (req, res) => {
       where: { id },
       select: {
         id: true, username: true, fullName: true, bio: true, avatarUrl: true, createdAt: true,
-        _count: { select: { followers: true, following: true, posts: true } },
-        posts: { orderBy: { createdAt: 'desc' }, take: 30, select: {
-          id: true, content: true, mediaUrl: true, mediaType: true, thumbnailUrl: true,
-          createdAt: true, likeCount: true, viewCount: true,
+        _count: { select: { followers: true, following: true, posts: { where: { status: 'approved' } } } },
+        posts: { where: { status: 'approved' }, orderBy: { createdAt: 'desc' }, take: 30, select: {
+          id: true, content: true, mediaUrl: true, mediaType: true,
+          createdAt: true, viewCount: true,
+          likes: { select: { id: true } },
           _count: { select: { comments: true } }
         } }
       }
@@ -22,7 +23,7 @@ export const getPublicUser = async (req, res) => {
       postsCount: _count.posts,
       followersCount: _count.followers,
       followingCount: _count.following,
-      posts: rest.posts.map(p => ({ ...p, likesCount: p.likeCount || 0, commentsCount: p._count.comments }))
+      posts: rest.posts.map(p => ({ ...p, likesCount: p.likes.length, commentsCount: p._count.comments, likes: undefined }))
     }});
   } catch (error) {
     console.error('Public profile error:', error);

@@ -55,10 +55,20 @@ export const createChat = async (req, res) => {
     if (!participant || participant.status === 'blocked') return res.status(404).json({ success: false, message: 'User is not available for chat' });
     const safety = await getSafetyPair(userId, participantId);
     if (safety.blockedByMe || safety.blockedMe) return res.status(403).json({ success: false, message: 'You cannot start a chat with this user' });
-    const existingChat = await prisma.chat.findFirst({ where: { AND: [{ participants: { some: { id: userId } } }, { participants: { some: { id: participantId } } }] }, include: { participants: true } });
-    if (existingChat) return res.json({ success: true, data: existingChat, exists: true });
-    const chat = await prisma.chat.create({ data: { participants: { connect: [{ id: userId }, { id: participantId }] } }, include: { participants: true } });
-    res.json({ success: true, data: chat, exists: false });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const result = await prisma.$transaction(async (tx) => {
+          const existingChat = await tx.chat.findFirst({ where: { AND: [{ participants: { some: { id: userId } } }, { participants: { some: { id: participantId } } }] }, include: { participants: true } });
+          if (existingChat) return { chat: existingChat, exists: true };
+          const chat = await tx.chat.create({ data: { participants: { connect: [{ id: userId }, { id: participantId }] } }, include: { participants: true } });
+          return { chat, exists: false };
+        }, { isolationLevel: 'Serializable' });
+        return res.json({ success: true, data: result.chat, exists: result.exists });
+      } catch (error) {
+        if (error?.code === 'P2034' && attempt < 2) continue;
+        throw error;
+      }
+    }
   } catch (error) { console.error('Create chat error:', error); res.status(500).json({ success: false, message: 'Failed to create chat' }); }
 };
 
@@ -91,6 +101,10 @@ export const toggleMessagePin = async (req, res) => {
   catch (error) { console.error('Toggle message pin error:', error); res.status(500).json({ success: false, message: 'Failed to update pinned message' }); }
 };
 export const forwardMessage = async (req, res) => {
-  try { const { chatId, messageId } = req.params, { targetChatId } = req.body, userId = req.userId; if (!targetChatId) return res.status(400).json({ success: false, message: 'Target chat is required' }); const [source, target] = await Promise.all([prisma.message.findFirst({ where: { id: messageId, chatId, chat: { participants: { some: { id: userId } } } } }), prisma.chat.findFirst({ where: { id: targetChatId, participants: { some: { id: userId } } } })]); if (!source || !target) return res.status(404).json({ success: false, message: !source ? 'Source message not found' : 'Target chat not found' }); const message = await prisma.message.create({ data: { chatId: targetChatId, senderId: userId, content: source.content || '', mediaUrl: source.mediaUrl || null, forwardedFromId: source.id }, include: { sender: { select: { id: true, username: true, avatarUrl: true } } } }); await prisma.chat.update({ where: { id: targetChatId }, data: { updatedAt: new Date() } }); req.app.get('io')?.to(`chat:${targetChatId}`).emit('new_message', message); res.status(201).json({ success: true, data: message }); }
+  try { const { chatId, messageId } = req.params, { targetChatId } = req.body, userId = req.userId; if (!targetChatId) return res.status(400).json({ success: false, message: 'Target chat is required' }); const [source, target] = await Promise.all([prisma.message.findFirst({ where: { id: messageId, chatId, chat: { participants: { some: { id: userId } } } } }), prisma.chat.findFirst({ where: { id: targetChatId, participants: { some: { id: userId } } }, include: { participants: { select: { id: true } } } })]); if (!source || !target) return res.status(404).json({ success: false, message: !source ? 'Source message not found' : 'Target chat not found' });
+    const targetParticipants = target.participants.filter((participant) => participant.id !== userId);
+    const safetyResults = await Promise.all(targetParticipants.map((participant) => getSafetyPair(userId, participant.id)));
+    if (safetyResults.some((safety) => safety.blockedByMe || safety.blockedMe)) return res.status(403).json({ success: false, message: 'Messaging is unavailable for this user' });
+    const message = await prisma.message.create({ data: { chatId: targetChatId, senderId: userId, content: source.content || '', mediaUrl: source.mediaUrl || null, forwardedFromId: source.id }, include: { sender: { select: { id: true, username: true, avatarUrl: true } } } }); await prisma.chat.update({ where: { id: targetChatId }, data: { updatedAt: new Date() } }); req.app.get('io')?.to(`chat:${targetChatId}`).emit('new_message', message); res.status(201).json({ success: true, data: message }); }
   catch (error) { console.error('Forward message error:', error); res.status(500).json({ success: false, message: 'Failed to forward message' }); }
 };

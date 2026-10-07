@@ -18,7 +18,6 @@ export const getMyReports = async (req, res) => {
             content: true,
             mediaUrl: true,
             mediaType: true,
-            thumbnailUrl: true,
             status: true,
             createdAt: true,
             user: { select: { id: true, username: true, fullName: true, avatarUrl: true } }

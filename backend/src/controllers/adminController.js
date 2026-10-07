@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import prisma from '../config/database.js';
+import { cloudinary, getCloudinaryPublicId } from '../config/cloudinary.js';
 import { createSessionForUser } from './sessionController.js';
 import { sendPasswordResetCode } from '../services/messageService.js';
 
@@ -16,7 +17,7 @@ export const adminLogin = async (req, res) => {
 
     const user = await prisma.user.findUnique({ where: { email } });
 
-    if (!user || user.role !== 'admin') {
+    if (!user || user.role !== 'admin' || user.status !== 'active') {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -210,6 +211,16 @@ export const updatePostStatus = async (req, res) => {
 export const deleteAdminPost = async (req, res) => {
   try {
     const { id } = req.params;
+    const post = await prisma.post.findUnique({ where: { id }, select: { mediaUrl: true, mediaType: true } });
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.mediaUrl) {
+      const publicId = getCloudinaryPublicId(post.mediaUrl);
+      if (publicId) {
+        await cloudinary.uploader.destroy(publicId, {
+          resource_type: post.mediaType === 'video' ? 'video' : 'image'
+        });
+      }
+    }
     await prisma.post.delete({ where: { id } });
     res.json({ message: 'Post deleted' });
   } catch (error) {
@@ -240,7 +251,10 @@ export const changeAdminPassword = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(newPassword, salt);
 
-    await prisma.user.update({ where: { id: req.userId }, data: { passwordHash } });
+    await prisma.$transaction([
+      prisma.user.update({ where: { id: req.userId }, data: { passwordHash } }),
+      prisma.session.updateMany({ where: { userId: req.userId, revokedAt: null }, data: { revokedAt: new Date() } }),
+    ]);
 
     res.json({ message: 'Password updated successfully' });
   } catch (error) {

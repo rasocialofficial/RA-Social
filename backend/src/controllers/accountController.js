@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import prisma from '../config/database.js';
+import { cloudinary, getCloudinaryPublicId } from '../config/cloudinary.js';
 
 const safeUser = (u) => ({
   id: u.id, username: u.username, email: u.email, phoneNumber: u.phoneNumber,
@@ -58,6 +59,19 @@ export const deleteAccount = async (req, res) => {
     if (!(await bcrypt.compare(password, user.passwordHash))) {
       return res.status(401).json({ success: false, message: 'Incorrect password' });
     }
+    const postsForCleanup = await prisma.post.findMany({ where: { userId }, select: { mediaUrl: true, mediaType: true } });
+    const cloudinaryAssets = postsForCleanup
+      .map((post) => ({ url: post.mediaUrl, resourceType: post.mediaType === 'video' ? 'video' : 'image' }))
+      .filter((asset) => asset.url && /res\.cloudinary\.com\//i.test(asset.url));
+    if (user.avatarUrl && /res\.cloudinary\.com\//i.test(user.avatarUrl)) {
+      cloudinaryAssets.push({ url: user.avatarUrl, resourceType: 'image' });
+    }
+    await Promise.allSettled(cloudinaryAssets.map(async ({ url, resourceType }) => {
+      const publicId = getCloudinaryPublicId(url);
+      if (!publicId) return;
+      await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+    }));
+
     await prisma.$transaction(async (tx) => {
       // Clean up relations whose sender/relation side is restrictive in older schemas.
       await tx.notification.deleteMany({ where: { senderId: userId } });

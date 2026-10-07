@@ -39,6 +39,16 @@ router.post('/inbound', async (req, res) => {
         replies: { create: { body: replyBody, status: 'generated' } }
       }, include: { replies: { orderBy: { createdAt: 'desc' } } }
     });
+    if (!shouldReview && basic && isGmailConfigured()) {
+      try {
+        const delivery = await sendGmail({ to: senderEmail, subject: /^re:/i.test(subject) ? subject : `Re: ${subject || 'RA Social Support'}`, text: replyBody, replyTo: process.env.GMAIL_USER || 'rasocialofficial@gmail.com' });
+        const sent = await prisma.mailAIMessage.update({ where: { id: message.id }, data: { status: 'replied', autoReply: true, replies: { create: { body: replyBody, status: 'sent' } } }, include: { replies: { orderBy: { createdAt: 'desc' } } } });
+        return res.status(201).json({ ...serialize(sent), delivery: 'sent', automatic: true, senderEmail: delivery.from, recipientEmail: delivery.to });
+      } catch (sendError) {
+        console.error('Mail AI automatic Gmail send failed:', sendError?.message || sendError);
+        return res.status(201).json({ ...serialize(message), automatic: true, delivery: 'failed', warning: 'Reply was prepared but Gmail delivery failed; review and send from Admin.' });
+      }
+    }
     return res.status(201).json({ ...serialize(message), automatic: false, delivery: 'review' });
   } catch (e) {
     console.error('Mail AI inbound error:', e);
@@ -163,6 +173,15 @@ router.post('/messages', async (req, res) => {
       },
       include: { replies: { orderBy: { createdAt: 'desc' } } },
     });
+    if (basic && replyBody && isGmailConfigured()) {
+      try {
+        const delivery = await sendGmail({ to: senderEmail, subject: /^re:/i.test(subject) ? subject : `Re: ${subject || 'RA Social Support'}`, text: replyBody, replyTo: process.env.GMAIL_USER || 'rasocialofficial@gmail.com' });
+        const sent = await prisma.mailAIMessage.update({ where: { id: message.id }, data: { status: 'replied', autoReply: true, replies: { create: { body: replyBody, status: 'sent' } } }, include: { replies: { orderBy: { createdAt: 'desc' } } } });
+        return res.status(201).json({ ...serialize(sent), delivery: 'sent', automatic: true, senderEmail: delivery.from, recipientEmail: delivery.to });
+      } catch (sendError) {
+        console.error('Mail AI automatic send failed:', sendError?.message || sendError);
+      }
+    }
     res.status(201).json(serialize(message));
   } catch (e) { console.error('Mail AI create error:', e); res.status(500).json({ error: 'Could not create Mail AI message' }); }
 });

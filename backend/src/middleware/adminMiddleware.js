@@ -20,7 +20,7 @@ export const protectAdmin = async (req, res, next) => {
       prisma.session.update({ where: { id: session.id }, data: { lastSeenAt: new Date() } }).catch(() => {});
     }
 
-    if (!user || user.role !== 'admin') {
+    if (!user || user.role !== 'admin' || user.status !== 'active') {
       return res.status(403).json({ error: 'Not authorized as admin' });
     }
 

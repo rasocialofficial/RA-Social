@@ -413,61 +413,6 @@ export const transcribeAI = async (req, res) => {
 
 
 
-// ---- Daily media limits (chat / text AI stays unlimited) ----
-const readLimit = (value, fallback) => { const n = parseInt(value, 10); return Number.isFinite(n) && n >= 0 ? n : fallback; };
-const MEDIA_LIMITS = {
-  image: readLimit(process.env.AI_DAILY_IMAGE_LIMIT, 10),
-  video: readLimit(process.env.AI_DAILY_VIDEO_LIMIT, 3)
-};
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-// Current day window in IST (resets every day at 12:00 AM IST)
-const istDayWindow = (now = new Date()) => {
-  const shifted = now.getTime() + IST_OFFSET_MS;
-  const start = new Date(Math.floor(shifted / DAY_MS) * DAY_MS - IST_OFFSET_MS);
-  return { start, resetsAt: new Date(start.getTime() + DAY_MS) };
-};
-
-const getMediaUsage = async (userId) => {
-  const { start, resetsAt } = istDayWindow();
-  const [images, videos] = await Promise.all(['image', 'video'].map((type) =>
-    prisma.aIMediaUsage.count({ where: { userId, type, createdAt: { gte: start } } })));
-  const build = (used, limit) => ({ used, limit, remaining: Math.max(0, limit - used) });
-  return { image: build(images, MEDIA_LIMITS.image), video: build(videos, MEDIA_LIMITS.video), resetsAt: resetsAt.toISOString(), timezone: 'Asia/Kolkata' };
-};
-
-// Reserve one slot before generating; release it if generation fails so only successful results count.
-const reserveMediaSlot = async (userId, type) => {
-  const { start } = istDayWindow();
-  const where = { userId, type, createdAt: { gte: start } };
-  const limit = MEDIA_LIMITS[type];
-  if (await prisma.aIMediaUsage.count({ where }) >= limit) return null;
-  const row = await prisma.aIMediaUsage.create({ data: { userId, type } });
-  if (await prisma.aIMediaUsage.count({ where }) > limit) {
-    await prisma.aIMediaUsage.delete({ where: { id: row.id } }).catch(() => {});
-    return null;
-  }
-  return row;
-};
-const releaseMediaSlot = async (slot) => { if (slot) await prisma.aIMediaUsage.delete({ where: { id: slot.id } }).catch(() => {}); };
-const sendLimitReached = async (res, userId, type) => {
-  const usage = await getMediaUsage(userId);
-  return res.status(429).json({ success: false, limitReached: true, message: `Today's ${type} limit is finished. It resets tomorrow at 12:00 AM IST.`, usage });
-};
-
-// ---- Style presets and aspect ratios ----
-const STYLE_PROMPTS = {
-  realistic: 'photorealistic, natural lighting, highly detailed, sharp focus',
-  anime: 'anime style, vibrant colors, clean line art, detailed illustration',
-  cartoon: 'cartoon style, bold outlines, bright playful colors, 2D animation look',
-  '3d': '3D render, Pixar-style, soft lighting, detailed textures, depth',
-  cinematic: 'cinematic, dramatic lighting, film still, shallow depth of field, color graded'
-};
-const ASPECT_SIZES = { '1:1': { width: 1024, height: 1024 }, '9:16': { width: 720, height: 1280 }, '16:9': { width: 1280, height: 720 } };
-const styledPrompt = (prompt, style) => (STYLE_PROMPTS[style] ? `${prompt.trim()}, ${STYLE_PROMPTS[style]}` : prompt.trim());
-const cleanStyle = (style) => (STYLE_PROMPTS[style] ? style : '');
-
 const uploadGeneratedMedia = (buffer, contentType, type) => new Promise((resolve, reject) => {
   const isVideo = type === 'video';
   const stream = cloudinary.uploader.upload_stream({
@@ -481,35 +426,26 @@ const uploadGeneratedMedia = (buffer, contentType, type) => new Promise((resolve
 });
 
 export const generateAIImage = async (req, res) => {
-  let slot = null;
   try {
-    const { prompt: rawPrompt = '', width = 1024, height = 1024, conversationId, style: rawStyle = '', aspectRatio = '' } = req.body || {};
-    const prompt = typeof rawPrompt === 'string' ? rawPrompt : '';
+    const { prompt = '', width = 1024, height = 1024, conversationId } = req.body || {};
     if (!prompt.trim()) return res.status(400).json({ success: false, message: 'Image prompt is required' });
-    const style = cleanStyle(rawStyle);
-    const aspect = ASPECT_SIZES[aspectRatio] ? aspectRatio : '1:1';
-    const size = ASPECT_SIZES[aspectRatio] || { width, height };
-    slot = await reserveMediaSlot(req.userId, 'image');
-    if (!slot) return sendLimitReached(res, req.userId, 'image');
-    const result = await groqAI.generateMedia(styledPrompt(prompt, style), { type: 'image', width: size.width, height: size.height });
-    if (!result.success) { await releaseMediaSlot(slot); return res.status(503).json({ success: false, message: result.error }); }
+    const result = await groqAI.generateMedia(prompt, { type: 'image', width, height });
+    if (!result.success) return res.status(503).json({ success: false, message: result.error });
     const uploaded = await uploadGeneratedMedia(result.buffer, result.contentType, 'image');
     const url = uploaded.secure_url || uploaded.url;
     let conversation = conversationId ? await prisma.aIConversation.findFirst({ where: { id: conversationId, userId: req.userId } }) : null;
     if (!conversation) conversation = await prisma.aIConversation.create({ data: { userId: req.userId, title: `Image: ${prompt.trim().slice(0, 65)}` } });
     await prisma.aIMessage.create({ data: { conversationId: conversation.id, role: 'user', content: prompt.trim() } });
-    const message = await prisma.aIMessage.create({ data: { conversationId: conversation.id, role: 'assistant', content: 'Image generated successfully.', model: result.model || null, attachments: [{ url, type: 'image', name: 'AI generated image', provider: result.provider, style, aspectRatio: aspect }] } });
+    const message = await prisma.aIMessage.create({ data: { conversationId: conversation.id, role: 'assistant', content: 'Image generated successfully.', model: result.model || null, attachments: [{ url, type: 'image', name: 'AI generated image', provider: result.provider }] } });
     await prisma.aIConversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
-    res.json({ success: true, data: { url, type: 'image', model: result.model, provider: result.provider, style, aspectRatio: aspect, conversationId: conversation.id, messageId: message.id, usage: await getMediaUsage(req.userId) } });
+    res.json({ success: true, data: { url, type: 'image', model: result.model, provider: result.provider, conversationId: conversation.id, messageId: message.id } });
   } catch (error) {
-    await releaseMediaSlot(slot);
     console.error('AI image generation error:', error);
     res.status(500).json({ success: false, message: error?.message || 'Image generation failed' });
   }
 };
 
 export const editAIImage = async (req, res) => {
-  let slot = null;
   try {
     const { prompt = '', conversationId, model = '', imageUrl = '' } = req.body || {};
     if (!prompt.trim()) return res.status(400).json({ success: false, message: 'Image edit prompt is required' });
@@ -528,47 +464,37 @@ export const editAIImage = async (req, res) => {
     if (!imageBuffer?.length) return res.status(400).json({ success: false, message: 'Please attach an image to edit' });
     if (!imageMime.startsWith('image/')) return res.status(400).json({ success: false, message: 'Only image files can be edited' });
 
-    slot = await reserveMediaSlot(req.userId, 'image');
-    if (!slot) return sendLimitReached(res, req.userId, 'image');
     const result = await groqAI.editImage(imageBuffer, imageName, imageMime, prompt, { model });
-    if (!result.success) { await releaseMediaSlot(slot); return res.status(503).json({ success: false, message: result.error }); }
+    if (!result.success) return res.status(503).json({ success: false, message: result.error });
     const uploaded = await uploadGeneratedMedia(result.buffer, result.contentType, 'image');
     const url = uploaded.secure_url || uploaded.url;
     let conversation = conversationId ? await prisma.aIConversation.findFirst({ where: { id: conversationId, userId: req.userId } }) : null;
     if (!conversation) conversation = await prisma.aIConversation.create({ data: { userId: req.userId, title: `Edit: ${prompt.trim().slice(0, 65)}` } });
-    await prisma.aIMessage.create({ data: { conversationId: conversation.id, role: 'user', content: prompt.trim(), attachments: [{ type: 'image', name: req.file?.originalname || 'source image' }] } });
+    await prisma.aIMessage.create({ data: { conversationId: conversation.id, role: 'user', content: prompt.trim(), attachments: [{ type: 'image', name: req.file.originalname || 'source image' }] } });
     const message = await prisma.aIMessage.create({ data: { conversationId: conversation.id, role: 'assistant', content: 'Image edited successfully.', model: result.model || null, attachments: [{ url, type: 'image', name: 'AI edited image', provider: result.provider }] } });
     await prisma.aIConversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
-    res.json({ success: true, data: { url, type: 'image', model: result.model, provider: result.provider, conversationId: conversation.id, messageId: message.id, usage: await getMediaUsage(req.userId) } });
+    res.json({ success: true, data: { url, type: 'image', model: result.model, provider: result.provider, conversationId: conversation.id, messageId: message.id } });
   } catch (error) {
-    await releaseMediaSlot(slot);
     console.error('AI image edit error:', error);
     res.status(500).json({ success: false, message: error?.message || 'Image editing failed' });
   }
 };
 
 export const generateAIVideo = async (req, res) => {
-  let slot = null;
   try {
-    const { prompt: rawPrompt = '', duration = 4, conversationId, style: rawStyle = '', aspectRatio = '' } = req.body || {};
-    const prompt = typeof rawPrompt === 'string' ? rawPrompt : '';
+    const { prompt = '', duration = 4, conversationId } = req.body || {};
     if (!prompt.trim()) return res.status(400).json({ success: false, message: 'Video prompt is required' });
-    const style = cleanStyle(rawStyle);
-    const aspect = aspectRatio === '9:16' ? '9:16' : '16:9';
-    slot = await reserveMediaSlot(req.userId, 'video');
-    if (!slot) return sendLimitReached(res, req.userId, 'video');
-    const result = await groqAI.generateMedia(styledPrompt(prompt, style), { type: 'video', duration, aspectRatio: aspect });
-    if (!result.success) { await releaseMediaSlot(slot); return res.status(503).json({ success: false, message: result.error }); }
+    const result = await groqAI.generateMedia(prompt, { type: 'video', duration });
+    if (!result.success) return res.status(503).json({ success: false, message: result.error });
     const uploaded = await uploadGeneratedMedia(result.buffer, result.contentType, 'video');
     const url = uploaded.secure_url || uploaded.url;
     let conversation = conversationId ? await prisma.aIConversation.findFirst({ where: { id: conversationId, userId: req.userId } }) : null;
     if (!conversation) conversation = await prisma.aIConversation.create({ data: { userId: req.userId, title: `Video: ${prompt.trim().slice(0, 65)}` } });
     await prisma.aIMessage.create({ data: { conversationId: conversation.id, role: 'user', content: prompt.trim() } });
-    const message = await prisma.aIMessage.create({ data: { conversationId: conversation.id, role: 'assistant', content: 'Video generated successfully.', model: result.model || null, attachments: [{ url, type: 'video', name: 'AI generated video', provider: result.provider, style, aspectRatio: aspect }] } });
+    const message = await prisma.aIMessage.create({ data: { conversationId: conversation.id, role: 'assistant', content: 'Video generated successfully.', model: result.model || null, attachments: [{ url, type: 'video', name: 'AI generated video', provider: result.provider }] } });
     await prisma.aIConversation.update({ where: { id: conversation.id }, data: { updatedAt: new Date() } });
-    res.json({ success: true, data: { url, type: 'video', model: result.model, provider: result.provider, duration, style, aspectRatio: aspect, conversationId: conversation.id, messageId: message.id, usage: await getMediaUsage(req.userId) } });
+    res.json({ success: true, data: { url, type: 'video', model: result.model, provider: result.provider, duration, conversationId: conversation.id, messageId: message.id } });
   } catch (error) {
-    await releaseMediaSlot(slot);
     console.error('AI video generation error:', error);
     res.status(500).json({ success: false, message: error?.message || 'Video generation failed' });
   }
@@ -618,12 +544,11 @@ export const aiHealth = async (req, res) => {
 
 export const aiUsage = async (req, res) => {
   try {
-    const [conversations, messages, media] = await Promise.all([
+    const [conversations, messages] = await Promise.all([
       prisma.aIConversation.count({ where: { userId: req.userId } }),
-      prisma.aIMessage.count({ where: { conversation: { userId: req.userId } } }),
-      getMediaUsage(req.userId)
+      prisma.aIMessage.count({ where: { conversation: { userId: req.userId } } })
     ]);
-    res.json({ success: true, data: { conversations, messages, media } });
+    res.json({ success: true, data: { conversations, messages } });
   } catch (error) {
     console.error('AI usage error:', error);
     res.status(500).json({ success: false, message: 'Failed to load AI usage' });

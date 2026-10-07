@@ -30,4 +30,29 @@ const upload = multer({
   }
 });
 
-export { cloudinary, upload };
+
+const getCloudinaryPublicId = (url) => {
+  try {
+    const pathname = new URL(url).pathname;
+    const marker = '/upload/';
+    const index = pathname.indexOf(marker);
+    if (index === -1) return null;
+    const parts = pathname.slice(index + marker.length).split('/').filter(Boolean);
+    while (parts.length && /^(?:v\d+|[a-z_]+_[^/]+)$/.test(parts[0])) {
+      // Skip Cloudinary delivery transformations and version segment.
+      if (/^v\d+$/.test(parts[0])) {
+        parts.shift();
+        break;
+      }
+      parts.shift();
+    }
+    if (!parts.length) return null;
+    const last = parts.pop();
+    parts.push(last.replace(/\.[^./]+$/, ''));
+    return parts.join('/');
+  } catch {
+    return null;
+  }
+};
+
+export { cloudinary, upload, getCloudinaryPublicId };

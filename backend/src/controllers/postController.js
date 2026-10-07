@@ -1,5 +1,5 @@
 import prisma from '../config/database.js';
-import { cloudinary } from '../config/cloudinary.js';
+import { cloudinary, getCloudinaryPublicId } from '../config/cloudinary.js';
 
 export const createPost = async (req, res) => {
   try {
@@ -99,21 +99,25 @@ export const getMyCreatorAds = async (req, res) => {
 
 export const getFeed = async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const skip = (page - 1) * limit;
 
-    const posts = await prisma.post.findMany({
-      where: { status: 'approved' },
-      include: {
+    const [posts, total] = await Promise.all([
+      prisma.post.findMany({
+        where: { status: 'approved' },
+        include: {
         user: { select: { id: true, username: true, fullName: true, avatarUrl: true } },
         likes: { select: { id: true } },
         comments: { select: { id: true } },
         hashtags: { include: { hashtag: { select: { name: true } } } }
       },
-      orderBy: { createdAt: 'desc' },
-      skip: parseInt(skip),
-      take: parseInt(limit)
-    });
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit
+      }),
+      prisma.post.count({ where: { status: 'approved' } })
+    ]);
 
     const formattedPosts = posts.map(post => ({
       ...post,
@@ -122,7 +126,7 @@ export const getFeed = async (req, res) => {
       hashtags: post.hashtags.map(h => h.hashtag.name)
     }));
 
-    res.json({ success: true, data: formattedPosts, pagination: { page: parseInt(page), limit: parseInt(limit), total: posts.length } });
+    res.json({ success: true, data: formattedPosts, pagination: { page, limit, total } });
   } catch (error) {
     console.error('Get feed error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch feed' });
@@ -134,7 +138,7 @@ export const getPostById = async (req, res) => {
     const { id } = req.params;
 
     const post = await prisma.post.findUnique({
-      where: { id },
+      where: { id, status: 'approved' },
       include: {
         user: { select: { id: true, username: true, fullName: true, avatarUrl: true } },
         likes: { include: { user: { select: { id: true, username: true, avatarUrl: true } } } },
@@ -173,8 +177,12 @@ export const deletePost = async (req, res) => {
     }
 
     if (post.mediaUrl) {
-      const publicId = post.mediaUrl.split('/').pop().split('.')[0];
-      await cloudinary.uploader.destroy(publicId);
+      const publicId = getCloudinaryPublicId(post.mediaUrl);
+      if (publicId) {
+        await cloudinary.uploader.destroy(publicId, {
+          resource_type: post.mediaType === 'video' ? 'video' : 'image'
+        });
+      }
     }
 
     await prisma.post.delete({ where: { id } });
@@ -205,6 +213,11 @@ export const likePost = async (req, res) => {
     const { id: postId } = req.params;
     const userId = req.userId;
 
+    const post = await prisma.post.findUnique({ where: { id: postId }, select: { userId: true, status: true } });
+    if (!post || post.status !== 'approved') {
+      return res.status(404).json({ success: false, message: 'Post not found' });
+    }
+
     const existingLike = await prisma.like.findUnique({
       where: { userId_postId: { userId, postId } }
     });
@@ -215,7 +228,6 @@ export const likePost = async (req, res) => {
     } else {
       await prisma.like.create({ data: { userId, postId } });
 
-      const post = await prisma.post.findUnique({ where: { id: postId }, select: { userId: true } });
       if (post.userId !== userId) {
         await prisma.notification.create({
           data: { receiverId: post.userId, senderId: userId, type: 'like', postId, message: 'liked your post' }
@@ -240,12 +252,16 @@ export const addComment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Comment content is required' });
     }
 
+    const post = await prisma.post.findUnique({ where: { id: postId }, select: { userId: true, status: true } });
+    if (!post || post.status !== 'approved') {
+      return res.status(404).json({ success: false, message: 'Post not found' });
+    }
+
     const comment = await prisma.comment.create({
       data: { userId, postId, content },
       include: { user: { select: { id: true, username: true, avatarUrl: true } } }
     });
 
-    const post = await prisma.post.findUnique({ where: { id: postId }, select: { userId: true } });
     if (post.userId !== userId) {
       await prisma.notification.create({
         data: { receiverId: post.userId, senderId: userId, type: 'comment', postId, message: 'commented on your post' }
@@ -264,8 +280,8 @@ export const viewPost = async (req, res) => {
     const { id: postId } = req.params;
     const userId = req.userId;
 
-    const post = await prisma.post.findUnique({ where: { id: postId }, select: { id: true } });
-    if (!post) return res.status(404).json({ success: false, message: 'Post not found' });
+    const post = await prisma.post.findUnique({ where: { id: postId }, select: { id: true, status: true } });
+    if (!post || post.status !== 'approved') return res.status(404).json({ success: false, message: 'Post not found' });
 
     const existing = await prisma.postView.findUnique({
       where: { userId_postId: { userId, postId } }
@@ -295,8 +311,8 @@ export const reportPost = async (req, res) => {
   try {
     const postId = req.params.id;
     const reason = String(req.body?.reason || 'other').trim().slice(0, 200);
-    const post = await prisma.post.findUnique({ where: { id: postId }, select: { id: true } });
-    if (!post) return res.status(404).json({ success: false, message: 'Post not found' });
+    const post = await prisma.post.findUnique({ where: { id: postId }, select: { id: true, status: true } });
+    if (!post || post.status !== 'approved') return res.status(404).json({ success: false, message: 'Post not found' });
     const existing = await prisma.report.findUnique({ where: { reporterId_postId: { reporterId: req.userId, postId } } });
     if (existing) return res.status(409).json({ success: false, message: 'You have already reported this post' });
     const report = await prisma.report.create({ data: { reporterId: req.userId, postId, reason: reason || 'other' } });
