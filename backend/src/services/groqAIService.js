@@ -463,6 +463,7 @@ GroqAIService.prototype.generateMedia = async function (prompt, options = {}) {
   if (type === 'video') {
     const duration = Math.max(1, Math.min(12, Number(options.duration || process.env.POLLINATIONS_VIDEO_DURATION || 4)));
     params.set('duration', String(duration));
+    if (['16:9', '9:16'].includes(options.aspectRatio)) params.set('aspectRatio', options.aspectRatio);
   } else {
     const width = Math.max(256, Math.min(2048, Number(options.width || 1024)));
     const height = Math.max(256, Math.min(2048, Number(options.height || 1024)));
